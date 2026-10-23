@@ -2,29 +2,27 @@ package telegram
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sync"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"ecomap/internal/domain/bin"
 	"ecomap/internal/dto"
 	"ecomap/internal/usecase"
-	"fmt"
 )
-
-
 
 type step int
 
 const (
 	stepNone step = iota
 
-	// registration
 	stepFullName
 	stepBinPhoto
 	stepBinLocation
 
-	// dump report
 	stepDumpPhoto
 	stepDumpLocation
 	stepDumpAddress
@@ -33,13 +31,18 @@ const (
 	stepDumpStatus
 )
 
+const (
+	btnRegister = "🧍 Регистрация"
+	btnDump     = "🗑 Сообщить о свалке"
+	btnHelp     = "ℹ️ Помощь"
+	btnMyBins   = "♻️ Моя урна"
+)
 
 type session struct {
 	step step
 	user dto.RegisterUserInput
 	dump dto.DumpReportInput
 }
-
 
 type Handler struct {
 	bot        *tgbotapi.BotAPI
@@ -50,11 +53,7 @@ type Handler struct {
 	sessions map[int64]*session
 }
 
-func New(
-	bot *tgbotapi.BotAPI,
-	registerUC *usecase.RegisterUserUseCase,
-	dumpUC *usecase.DumpReportUsecase,
-) *Handler {
+func New(bot *tgbotapi.BotAPI, registerUC *usecase.RegisterUserUseCase, dumpUC *usecase.DumpReportUsecase) *Handler {
 	return &Handler{
 		bot:        bot,
 		registerUC: registerUC,
@@ -63,328 +62,300 @@ func New(
 	}
 }
 
-
-
-func (h *Handler) Start() {
+func (h *Handler) Start(ctx context.Context) {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates := h.bot.GetUpdatesChan(u)
 
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
-
-		if update.Message.IsCommand() {
-			h.handleCommand(update)
-			continue
-		}
-
-		for update := range updates {
-			if update.Message != nil {
-				h.handleMessage(update)
-			} else if update.CallbackQuery != nil {
-				h.handleCallback(update)
+	for {
+		select {
+		case <-ctx.Done():
+			h.bot.StopReceivingUpdates()
+			return
+		case update, ok := <-updates:
+			if !ok {
+				return
 			}
+			h.handleUpdate(ctx, update)
 		}
-		
 	}
 }
 
-
-
-func (h *Handler) handleCommand(update tgbotapi.Update) {
-	if update.Message.Command() != "start" {
+func (h *Handler) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	switch {
+	case update.CallbackQuery != nil:
+		h.handleCallback(ctx, update.CallbackQuery)
+	case update.Message == nil:
 		return
+	case update.Message.IsCommand():
+		h.handleCommand(update.Message)
+	default:
+		h.handleMessage(ctx, update.Message)
 	}
-
-	msg := tgbotapi.NewMessage(
-		update.Message.Chat.ID,
-		"🌱 *EcoMap*\n\nВыберите действие:",
-	)
-	msg.ParseMode = "Markdown"
-	msg.ReplyMarkup = mainMenu()
-
-	h.bot.Send(msg)
 }
 
+func (h *Handler) send(c tgbotapi.Chattable) {
+	if _, err := h.bot.Send(c); err != nil {
+		log.Printf("telegram send: %v", err)
+	}
+}
 
-func (h *Handler) handleMessage(update tgbotapi.Update) {
-	chatID := update.Message.Chat.ID
+func (h *Handler) reply(chatID int64, text string) {
+	h.send(tgbotapi.NewMessage(chatID, text))
+}
 
-	// кнопки главного меню
-	switch update.Message.Text {
-	case "♻️ Моя урна":
-		h.showUserBins(update)
-	
-	case "🧍 Регистрация":
-		h.startRegistration(update)
+func (h *Handler) handleCommand(msg *tgbotapi.Message) {
+	if msg.Command() != "start" {
 		return
+	}
+	h.dropSession(msg.Chat.ID)
 
-	case "🗑 Сообщить о свалке":
-		h.startDumpReport(update)
+	m := tgbotapi.NewMessage(msg.Chat.ID, "🌱 *EcoMap*\n\nВыберите действие:")
+	m.ParseMode = tgbotapi.ModeMarkdown
+	m.ReplyMarkup = mainMenu()
+	h.send(m)
+}
+
+func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+
+	switch msg.Text {
+	case btnMyBins:
+		h.dropSession(chatID)
+		h.showUserBins(ctx, chatID, msg.From.ID)
 		return
-
-	case "ℹ️ Помощь":
-		h.bot.Send(tgbotapi.NewMessage(
-			chatID,
-			"Вы можете зарегистрироваться или сообщить о свалке.\nПросто выберите действие.",
-		))
+	case btnRegister:
+		h.startRegistration(chatID, msg.From.ID)
+		return
+	case btnDump:
+		h.startDumpReport(chatID, msg.From.ID)
+		return
+	case btnHelp:
+		h.dropSession(chatID)
+		h.reply(chatID, "Вы можете зарегистрироваться или сообщить о свалке.\nПросто выберите действие.")
 		return
 	}
 
-	// продолжаем сценарий
 	h.mu.Lock()
 	sess, ok := h.sessions[chatID]
 	h.mu.Unlock()
 
 	if !ok {
-		msg := tgbotapi.NewMessage(chatID, "Нажмите /start")
-		msg.ReplyMarkup = mainMenu()
-		h.bot.Send(msg)
+		m := tgbotapi.NewMessage(chatID, "Нажмите /start")
+		m.ReplyMarkup = mainMenu()
+		h.send(m)
 		return
 	}
 
 	switch sess.step {
-
-	/* ===== DUMP REPORT ===== */
-
 	case stepDumpPhoto:
-		if len(update.Message.Photo) == 0 {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "📸 Пожалуйста, отправьте фотографию свалки"))
+		if len(msg.Photo) == 0 {
+			h.reply(chatID, "📸 Пожалуйста, отправьте фотографию свалки")
 			return
 		}
-
-		photo := update.Message.Photo[len(update.Message.Photo)-1]
-		sess.dump.PhotoURL = photo.FileID
+		sess.dump.PhotoID = msg.Photo[len(msg.Photo)-1].FileID
 		sess.step = stepDumpLocation
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "📍 Отправьте геолокацию свалки"))
+		h.reply(chatID, "📍 Отправьте геолокацию свалки")
 
 	case stepDumpLocation:
-		if update.Message.Location == nil {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "📍 Нужна геолокация"))
+		if msg.Location == nil {
+			h.reply(chatID, "📍 Нужна геолокация")
 			return
 		}
-
-		sess.dump.Lat = update.Message.Location.Latitude
-		sess.dump.Lon = update.Message.Location.Longitude
+		sess.dump.Lat = msg.Location.Latitude
+		sess.dump.Lon = msg.Location.Longitude
 		sess.step = stepDumpAddress
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "🏠 Укажите адрес (если знаете)"))
+		h.reply(chatID, "🏠 Укажите адрес (если знаете)")
 
 	case stepDumpAddress:
-		sess.dump.Address = update.Message.Text
+		sess.dump.Address = msg.Text
 		sess.step = stepDumpLandmark
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "🧭 Добавьте ориентир (школа, магазин и т.д.)"))
+		h.reply(chatID, "🧭 Добавьте ориентир (школа, магазин и т.д.)")
 
 	case stepDumpLandmark:
-		sess.dump.Landmark = update.Message.Text
+		sess.dump.Landmark = msg.Text
 		sess.step = stepDumpDesc
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "📝 Кратко опишите проблему"))
+		h.reply(chatID, "📝 Кратко опишите проблему")
 
 	case stepDumpDesc:
-		sess.dump.Description = update.Message.Text
+		sess.dump.Description = msg.Text
 		sess.step = stepDumpStatus
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "🚨 Состояние свалки (обычная / опасная / срочно)"))
+		h.reply(chatID, "🚨 Состояние свалки (обычная / опасная / срочно)")
 
 	case stepDumpStatus:
-		sess.dump.Status = update.Message.Text
-		sess.dump.TelegramID = update.Message.From.ID
-
-		if err := h.dumpUC.Execute(context.Background(), sess.dump); err != nil {
-			log.Println(err)
-			h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при сохранении жалобы"))
+		sess.dump.Status = msg.Text
+		err := h.dumpUC.Execute(ctx, sess.dump)
+		if errors.Is(err, usecase.ErrNotRegistered) {
+			h.finish(chatID, "❗ Сначала нужно зарегистрироваться")
 			return
 		}
-
+		if err != nil {
+			log.Printf("dump report: %v", err)
+			h.reply(chatID, "❌ Ошибка при сохранении жалобы, попробуйте ещё раз")
+			return
+		}
 		h.finish(chatID, "✅ Жалоба принята. Спасибо!")
 
-
-
 	case stepFullName:
-		sess.user.FullName = update.Message.Text
+		if msg.Text == "" {
+			h.reply(chatID, "Введите ваше ФИО текстом")
+			return
+		}
+		sess.user.FullName = msg.Text
 		sess.step = stepBinPhoto
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "📸 Отправьте фото урны"))
+		h.reply(chatID, "📸 Отправьте фото урны")
 
 	case stepBinPhoto:
-		if len(update.Message.Photo) == 0 {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "📸 Нужна фотография"))
+		if len(msg.Photo) == 0 {
+			h.reply(chatID, "📸 Нужна фотография")
 			return
 		}
-
-		photo := update.Message.Photo[len(update.Message.Photo)-1]
-		sess.user.BinPhoto = photo.FileID
+		sess.user.BinPhoto = msg.Photo[len(msg.Photo)-1].FileID
 		sess.step = stepBinLocation
-
-		h.bot.Send(tgbotapi.NewMessage(chatID, "📍 Отправьте геолокацию"))
+		h.reply(chatID, "📍 Отправьте геолокацию")
 
 	case stepBinLocation:
-		if update.Message.Location == nil {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "📍 Нужна геолокация"))
+		if msg.Location == nil {
+			h.reply(chatID, "📍 Нужна геолокация")
 			return
 		}
-
-		sess.user.Lat = update.Message.Location.Latitude
-		sess.user.Lon = update.Message.Location.Longitude
-
-		h.finishRegistration(chatID, sess)
+		sess.user.Lat = msg.Location.Latitude
+		sess.user.Lon = msg.Location.Longitude
+		h.finishRegistration(ctx, chatID, sess)
 	}
 }
 
-
-func (h *Handler) startRegistration(update tgbotapi.Update) {
-	chatID := update.Message.Chat.ID
-
-	h.mu.Lock()
-	h.sessions[chatID] = &session{
+func (h *Handler) startRegistration(chatID, telegramID int64) {
+	h.setSession(chatID, &session{
 		step: stepFullName,
-		user: dto.RegisterUserInput{
-			TelegramID: update.Message.From.ID,
-		},
-	}
-	h.mu.Unlock()
-
-	h.bot.Send(tgbotapi.NewMessage(chatID, "Введите ваше ФИО:"))
+		user: dto.RegisterUserInput{TelegramID: telegramID},
+	})
+	h.reply(chatID, "Введите ваше ФИО:")
 }
 
-func (h *Handler) startDumpReport(update tgbotapi.Update) {
-	chatID := update.Message.Chat.ID
-
-	h.mu.Lock()
-	h.sessions[chatID] = &session{
+func (h *Handler) startDumpReport(chatID, telegramID int64) {
+	h.setSession(chatID, &session{
 		step: stepDumpPhoto,
-		dump: dto.DumpReportInput{
-			TelegramID: update.Message.From.ID,
-		},
-	}
-	h.mu.Unlock()
-
-	h.bot.Send(tgbotapi.NewMessage(chatID, "📸 Отправьте фотографию свалки"))
+		dump: dto.DumpReportInput{TelegramID: telegramID},
+	})
+	h.reply(chatID, "📸 Отправьте фотографию свалки")
 }
 
-func (h *Handler) finishRegistration(chatID int64, sess *session) {
-	ctx := context.Background()
-
-	exists, err := h.registerUC.UserExists(ctx, sess.user.TelegramID)
-	if err != nil {
-		log.Println(err)
-		h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка проверки пользователя"))
-		return
-	}
-
-	if exists {
+func (h *Handler) finishRegistration(ctx context.Context, chatID int64, sess *session) {
+	qrPath, err := h.registerUC.Execute(ctx, sess.user)
+	if errors.Is(err, usecase.ErrAlreadyRegistered) {
 		h.finish(chatID, "Вы уже зарегистрированы ✅")
 		return
-	}       
-
-	qrPath, err := h.registerUC.Execute(ctx, sess.user)
+	}
 	if err != nil {
-		log.Println(err)
-		h.bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка регистрации"))
+		log.Printf("register: %v", err)
+		h.reply(chatID, "❌ Ошибка регистрации, попробуйте ещё раз")
 		return
 	}
 
-	h.bot.Send(tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(qrPath)))
+	h.send(tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(qrPath)))
 	h.finish(chatID, "✅ Регистрация завершена\nВаш QR-код готов")
 }
 
 func (h *Handler) finish(chatID int64, text string) {
-	h.bot.Send(tgbotapi.NewMessage(chatID, text))
+	h.reply(chatID, text)
 
-	msg := tgbotapi.NewMessage(chatID, "Что делаем дальше?")
-	msg.ReplyMarkup = mainMenu()
-	h.bot.Send(msg)
+	m := tgbotapi.NewMessage(chatID, "Что делаем дальше?")
+	m.ReplyMarkup = mainMenu()
+	h.send(m)
 
+	h.dropSession(chatID)
+}
+
+func (h *Handler) showUserBins(ctx context.Context, chatID, telegramID int64) {
+	bins, err := h.registerUC.GetUserBins(ctx, telegramID)
+	if errors.Is(err, usecase.ErrNotRegistered) {
+		h.reply(chatID, "❗ Сначала нужно зарегистрироваться")
+		return
+	}
+	if err != nil {
+		log.Printf("get bins: %v", err)
+		h.reply(chatID, "❌ Не удалось загрузить урны")
+		return
+	}
+	if len(bins) == 0 {
+		h.reply(chatID, "У вас пока нет урн")
+		return
+	}
+
+	text := "Ваши урны:\n"
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, b := range bins {
+		text += fmt.Sprintf("📦 ID: %d — Статус: %s\n", b.ID, b.Status)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Заполнена", fmt.Sprintf("bin_full_%d", b.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("♻️ Пустая", fmt.Sprintf("bin_empty_%d", b.ID)),
+		))
+	}
+
+	m := tgbotapi.NewMessage(chatID, text)
+	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	h.send(m)
+}
+
+func (h *Handler) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
+	if _, err := h.bot.Request(tgbotapi.NewCallback(cb.ID, "")); err != nil {
+		log.Printf("answer callback: %v", err)
+	}
+	if cb.Message == nil {
+		return
+	}
+	chatID := cb.Message.Chat.ID
+
+	binID, status, ok := parseBinCallback(cb.Data)
+	if !ok {
+		return
+	}
+
+	err := h.registerUC.UpdateBinStatus(ctx, cb.From.ID, binID, status)
+	switch {
+	case errors.Is(err, usecase.ErrNotOwner), errors.Is(err, usecase.ErrBinNotFound):
+		h.reply(chatID, "❌ Это не ваша урна")
+	case err != nil:
+		log.Printf("update bin %d: %v", binID, err)
+		h.reply(chatID, "❌ Не удалось обновить статус")
+	default:
+		h.reply(chatID, fmt.Sprintf("✅ Статус урны #%d обновлён на: %s", binID, status))
+	}
+}
+
+func parseBinCallback(data string) (uint64, string, bool) {
+	var id uint64
+	if _, err := fmt.Sscanf(data, "bin_full_%d", &id); err == nil {
+		return id, bin.StatusFull, true
+	}
+	if _, err := fmt.Sscanf(data, "bin_empty_%d", &id); err == nil {
+		return id, bin.StatusEmpty, true
+	}
+	return 0, "", false
+}
+
+func (h *Handler) setSession(chatID int64, s *session) {
+	h.mu.Lock()
+	h.sessions[chatID] = s
+	h.mu.Unlock()
+}
+
+func (h *Handler) dropSession(chatID int64) {
 	h.mu.Lock()
 	delete(h.sessions, chatID)
 	h.mu.Unlock()
 }
 
-
-func (h *Handler) showUserBins(update tgbotapi.Update) {
-	chatID := update.Message.Chat.ID
-	go func(chatID int64, userID int64) {
-		ctx := context.Background()
-		bins, err := h.registerUC.GetUserBins(ctx, userID)
-		if err != nil {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "❗ Сначала нужно зарегистрироваться"))
-			return
-		}
-
-		if len(bins) == 0 {
-			h.bot.Send(tgbotapi.NewMessage(chatID, "У вас пока нет урн"))
-			return
-		}
-
-		text := "Ваши урны:\n"
-		var rows [][]tgbotapi.InlineKeyboardButton
-
-		for _, b := range bins {
-			text += fmt.Sprintf("📦 ID: %d — Статус: %s\n", b.ID, b.Status)
-			row := tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("✅ Заполнена", fmt.Sprintf("bin_full_%d", b.ID)),
-				tgbotapi.NewInlineKeyboardButtonData("♻️ Пустая", fmt.Sprintf("bin_empty_%d", b.ID)),
-			)
-			rows = append(rows, row)
-		}
-
-		msg := tgbotapi.NewMessage(chatID, text)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
-		h.bot.Send(msg)
-	}(chatID, update.Message.From.ID)
-}
-
-
-
-func (h *Handler) handleCallback(update tgbotapi.Update) {
-	callback := update.CallbackQuery
-	if callback == nil {
-		return
-	}
-
-	data := callback.Data 
-	var binID int64
-	var newStatus string
-
-	if _, err := fmt.Sscanf(data, "bin_full_%d", &binID); err == nil {
-		newStatus = "Нужна уборка"
-	} else if _, err := fmt.Sscanf(data, "bin_empty_%d", &binID); err == nil {
-		newStatus = "Пустая"
-	} else {
-		return
-	}
-
-	ctx := context.Background()
-	log.Println("here is updating of bin status")
-	if err := h.registerUC.UpdateBinStatus(ctx ,  binID, newStatus); err != nil {
-		h.bot.Send(tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "❌ Не удалось обновить статус"))
-		return
-	}
-	msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID,
-		fmt.Sprintf("✅ Статус урны #%d обновлён на: %s", binID, newStatus))
-	h.bot.Send(msg)
-
-	h.bot.Request(tgbotapi.NewCallback(callback.ID, ""))
-}
-
-
 func mainMenu() tgbotapi.ReplyKeyboardMarkup {
 	return tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🧍 Регистрация"),
-			tgbotapi.NewKeyboardButton("🗑 Сообщить о свалке"),
-			
+			tgbotapi.NewKeyboardButton(btnRegister),
+			tgbotapi.NewKeyboardButton(btnDump),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("ℹ️ Помощь"),
-			tgbotapi.NewKeyboardButton("♻️ Моя урна"),
-
+			tgbotapi.NewKeyboardButton(btnHelp),
+			tgbotapi.NewKeyboardButton(btnMyBins),
 		),
 	)
 }

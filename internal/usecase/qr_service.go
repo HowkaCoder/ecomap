@@ -1,5 +1,5 @@
 package usecase
 
 type QRService interface {
-	Generate() (filePath string, err error)
+	Generate() (code string, filePath string, err error)
 }

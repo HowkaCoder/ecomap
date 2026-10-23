@@ -1,5 +1,7 @@
 package usecase
 
+import "context"
+
 type PhotoStorage interface {
-	SaveTelegramPhoto(fileID string, folder string) (string, error)
+	SaveTelegramPhoto(ctx context.Context, fileID, folder string) (string, error)
 }
