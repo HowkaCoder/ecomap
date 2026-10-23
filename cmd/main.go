@@ -1,69 +1,56 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"ecomap/internal/adapter/photo"
 	"ecomap/internal/adapter/postgres"
 	"ecomap/internal/adapter/qr"
 	"ecomap/internal/handler/telegram"
 	"ecomap/internal/usecase"
-	"ecomap/internal/adapter/photo"
 )
+
 func main() {
-	// 1️⃣ Читаем env
 	botToken := os.Getenv("BOT_TOKEN")
 	dbURL := os.Getenv("DATABASE_URL")
-
+	storageDir := os.Getenv("STORAGE_DIR")
+	if storageDir == "" {
+		storageDir = "storage"
+	}
 	if botToken == "" || dbURL == "" {
-		log.Fatal("BOT_TOKEN or DATABASE_URL not set")
+		log.Fatal("BOT_TOKEN and DATABASE_URL must be set")
 	}
 
-	// 2️⃣ Telegram bot
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("telegram: %v", err)
 	}
-	bot.Debug = false
+	log.Printf("authorized as @%s", bot.Self.UserName)
 
-	log.Printf("Authorized as @%s", bot.Self.UserName)
-
-	// 3️⃣ PostgreSQL (pgx pool)
-	// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	// defer cancel()
-
-	db, err := postgres.NewPool(dbURL)
+	db, err := postgres.NewPool(ctx, dbURL)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("postgres: %v", err)
 	}
 	defer db.Close()
 
-	// 4️⃣ Repositories
-	userRepo := postgres.NewUserRepo(db)
-	binRepo := postgres.NewBinRepo(db)
-	dumpRepo := postgres.NewDumpRepo(db)
-	photoRepo := photo.New(bot , "photos")
-	// 5️⃣ Services
-	qrService := qr.New("storage")
+	users := postgres.NewUserRepo(db)
+	bins := postgres.NewBinRepo(db)
+	dumps := postgres.NewDumpRepo(db)
+	photos := photo.New(bot, storageDir)
 
-	// 6️⃣ Usecases
-	registerUserUC := usecase.NewRegisterUserUseCase(
-		userRepo,
-		binRepo,
-		qrService,
-		photoRepo,
-	)
+	registerUC := usecase.NewRegisterUserUseCase(users, bins, qr.New(storageDir), photos)
+	dumpUC := usecase.NewDumpReportUsecase(users, dumps, photos)
 
-	DumpRepoUsecaseUC := usecase.NewDumpReportUsecase(userRepo , dumpRepo , photoRepo)
-	// 7️⃣ Telegram handler
-	handler := telegram.New(
-		bot,
-		registerUserUC,
-		DumpRepoUsecaseUC,
-	)
-
-	log.Println("🚀 Bot started")
-	handler.Start()
+	log.Println("bot started")
+	telegram.New(bot, registerUC, dumpUC).Start(ctx)
+	log.Println("bot stopped")
 }

@@ -1,6 +1,7 @@
 package qr
 
 import (
+	"os"
 	"path/filepath"
 
 	"github.com/google/uuid"
@@ -8,22 +9,22 @@ import (
 )
 
 type Service struct {
-	basePath string
+	dir string
 }
 
 func New(basePath string) *Service {
-	return &Service{basePath: basePath}
+	return &Service{dir: filepath.Join(basePath, "qr")}
 }
 
-func (s *Service) Generate() (string, error) {
-	secret := uuid.NewString()
+func (s *Service) Generate() (string, string, error) {
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return "", "", err
+	}
 
-	path := filepath.Join(
-		s.basePath,
-		"qr",
-		secret+".png",
-	)
-
-	err := qrcode.WriteFile(secret, qrcode.Medium, 256, path)
-	return path, err
+	code := uuid.NewString()
+	path := filepath.Join(s.dir, code+".png")
+	if err := qrcode.WriteFile(code, qrcode.Medium, 256, path); err != nil {
+		return "", "", err
+	}
+	return code, path, nil
 }

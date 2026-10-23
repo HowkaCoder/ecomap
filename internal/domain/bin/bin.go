@@ -1,15 +1,19 @@
-package bin 
+package bin
 
+const (
+	StatusEmpty = "Пустая"
+	StatusFull  = "Нужна уборка"
+)
 
 type Bin struct {
-	ID 				uint64
-	OwnerID			uint64
-	QRCode			string 
-	PhotoURL		string
-	Lat 			float64
-	Lon				float64
-	Address			string 
-	Landmark 		string 
-	Verified 		bool 
-	Status			string 
+	ID       uint64
+	OwnerID  uint64
+	QRCode   string
+	PhotoURL string
+	Lat      float64
+	Lon      float64
+	Address  string
+	Landmark string
+	Verified bool
+	Status   string
 }

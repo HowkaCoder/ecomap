@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://ecomap:ecomap@db:5432/ecomap?sslmode=disable
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ecomap
+      POSTGRES_PASSWORD: ecomap
+      POSTGRES_DB: ecomap
+    volumes:
+      - pg:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecomap"]
+      interval: 3s
+      retries: 10
+
+volumes:
+  pg:
+  storage:
