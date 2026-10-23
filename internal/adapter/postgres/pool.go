@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func NewPool(dsn string) (*pgxpool.Pool, error) {
+func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
@@ -15,7 +15,15 @@ func NewPool(dsn string) (*pgxpool.Pool, error) {
 
 	cfg.MaxConns = 10
 	cfg.MinConns = 2
-	cfg.MaxConnIdleTime = time.Minute * 5
+	cfg.MaxConnIdleTime = 5 * time.Minute
 
-	return pgxpool.NewWithConfig(context.Background(), cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
 }
