@@ -1,51 +1,45 @@
-package usecase 
+package usecase
 
 import (
-	"errors"
+	"context"
 
 	"ecomap/internal/domain/dump"
-    "context"
-	"ecomap/internal/dto"
 	"ecomap/internal/domain/user"
+	"ecomap/internal/dto"
 )
 
 type DumpReportUsecase struct {
-	users 	user.UserRepository
-	dumps 	dump.DumpRepository
-	photos  PhotoStorage
+	users  user.UserRepository
+	dumps  dump.DumpRepository
+	photos PhotoStorage
 }
 
-func NewDumpReportUsecase(users user.UserRepository , dumps dump.DumpRepository , photo PhotoStorage) *DumpReportUsecase {
-	return &DumpReportUsecase{users:users , dumps:dumps , photos:photo}
+func NewDumpReportUsecase(users user.UserRepository, dumps dump.DumpRepository, photos PhotoStorage) *DumpReportUsecase {
+	return &DumpReportUsecase{users: users, dumps: dumps, photos: photos}
 }
 
-func (dc *DumpReportUsecase) Execute(ctx context.Context , input dto.DumpReportInput) error {
-	
-	existing, _ := dc.users.GetByTelegramID(ctx, input.TelegramID)
-    
-	if existing == nil {
-        return errors.New("user doesnt exists")
-    }
+func (uc *DumpReportUsecase) Execute(ctx context.Context, input dto.DumpReportInput) error {
+	u, err := uc.users.GetByTelegramID(ctx, input.TelegramID)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return ErrNotRegistered
+	}
 
-	photoPath, err := dc.photos.SaveTelegramPhoto(
-		input.PhotoURL,
-		"dump_reports",
-	)
+	photoPath, err := uc.photos.SaveTelegramPhoto(ctx, input.PhotoID, "dump_reports")
 	if err != nil {
 		return err
 	}
 
-
-	d1 := &dump.Dump{
-		UserID: 	existing.ID, 
-		PhotoURL: 	photoPath,
-		Lat:		input.Lat,
-		Lon:		input.Lon,
-        Address:  	input.Address,
-        Landmark: 	input.Landmark,
-		Description:		input.Description,
-		Status:		input.Status,
-	}
-	return dc.dumps.CreateDump(ctx , d1)
-
+	return uc.dumps.CreateDump(ctx, &dump.Dump{
+		UserID:      u.ID,
+		PhotoURL:    photoPath,
+		Lat:         input.Lat,
+		Lon:         input.Lon,
+		Address:     input.Address,
+		Landmark:    input.Landmark,
+		Description: input.Description,
+		Status:      input.Status,
+	})
 }
