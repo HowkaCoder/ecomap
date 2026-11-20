@@ -5,7 +5,7 @@ This branch adds a pilot workflow for household recycling, collection operations
 ## Before the first Telegram test
 
 1. The test Railway service has `BOT_TOKEN` and `ADMIN_TELEGRAM_IDS` configured. Keep their values private.
-2. `BOT_POLLING_ENABLED=false` in the pilot. This is required because the live bot uses the same Telegram token; Telegram allows only one `getUpdates` poller. Do not enable polling in the pilot while the live bot is running.
+2. `BOT_POLLING_ENABLED=true` in the pilot so `/start` and other bot commands are handled. Keep exactly one Railway replica polling this token and check logs for Telegram `getUpdates` conflicts if another bot process is started with the same token.
 3. Open the EcoMap Mini App from its existing Telegram Web App button. A normal browser visit is not authenticated and will not load resident data.
 4. `PICKUP_SCHEDULE` is set to a demo schedule (`mon:plastic,tue:paper,fri:glass`) with `TIMEZONE=Asia/Tashkent`.
 5. Check `https://ecomap-bot-test-pilot.up.railway.app/healthz`; expected response is `{"status":"ok"}`. The pilot Mini App page should return HTTP 200.
