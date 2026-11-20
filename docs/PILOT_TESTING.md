@@ -1,25 +1,25 @@
 # EcoMap Bin4Home pilot: test guide
 
-This branch adds a pilot workflow for household recycling, collection operations, and a Telegram Mini App. It is isolated from the production branch and database. The Mini App opens from `/start`; Karakalpak is the default language, with Russian available from `🗣 Til / Язык` or the language toggle in the app. Residents can report a missed pickup, report an illegal dump with location, and manage reminders directly in the Mini App.
+This branch adds a pilot workflow for household recycling, collection operations, and a Telegram Mini App. It is isolated from the production branch and database. The Mini App URL is `https://ecomap-bot-test-pilot.up.railway.app/miniapp/`; it must be launched from an existing Telegram Web App button so Telegram can provide signed user data. Karakalpak is the default language, with Russian available from the language toggle. Residents can report a missed pickup, report an illegal dump with location, and manage reminders directly in the Mini App.
 
 ## Before the first Telegram test
 
-1. The test Railway service already has `BOT_TOKEN` configured. Keep its value private.
-2. Start a chat with the configured bot and send `/start`, then `/id`.
-3. Confirm your ID is in `ADMIN_TELEGRAM_IDS`. Add pilot collectors to `COLLECTOR_TELEGRAM_IDS` and receiving-facility accounts to `RECYCLER_TELEGRAM_IDS` if other test accounts will be used. IDs are comma-separated. Admins also have collector and recycler permissions.
-4. `PICKUP_SCHEDULE` is set to a demo schedule (`mon:plastic,tue:paper,fri:glass`) with `TIMEZONE=Asia/Tashkent`; replace it if you want to test another calendar.
-5. Check `<service-domain>/healthz`; expected response is `{"status":"ok"}`. In Telegram, `/start` should show both the Karakalpak keyboard and the Mini App launch button.
+1. The test Railway service has `BOT_TOKEN` and `ADMIN_TELEGRAM_IDS` configured. Keep their values private.
+2. `BOT_POLLING_ENABLED=false` in the pilot. This is required because the live bot uses the same Telegram token; Telegram allows only one `getUpdates` poller. Do not enable polling in the pilot while the live bot is running.
+3. Open the EcoMap Mini App from its existing Telegram Web App button. A normal browser visit is not authenticated and will not load resident data.
+4. `PICKUP_SCHEDULE` is set to a demo schedule (`mon:plastic,tue:paper,fri:glass`) with `TIMEZONE=Asia/Tashkent`.
+5. Check `https://ecomap-bot-test-pilot.up.railway.app/healthz`; expected response is `{"status":"ok"}`. The pilot Mini App page should return HTTP 200.
 
-`DATABASE_URL` should be wired to the separate Postgres service. The bot applies additive schema migrations during startup. Do not point this test service at production data.
+`DATABASE_URL` should be wired to the separate Postgres service. The service applies additive schema migrations during startup. Do not point this test service at production data.
 
 ## Resident scenarios
 
 | Scenario | Steps | Expected result |
 |---|---|---|
-| Register a household | `/start` → `Úydi qosıw` → name → photo → address → location | Three QR codes arrive, one each for plastic, paper and glass; `/bins` and the Mini App list them separately. |
-| Open the Mini App | Tap `EcoMap Mini App` under `/start` | A responsive dashboard opens inside Telegram. Karakalpak is selected by default; card transitions and animated charts respect reduced-motion settings. |
-| Switch the language | Tap `🗣 Til / Язык` or the Mini App language toggle | Russian and Karakalpak can be selected; the Mini App remembers the choice and the bot stores it for that Telegram account. |
-| See the pickup schedule | Open `Alıp ketiw kestesi` or send `/calendar` | Configured weekdays and material types appear; the Mini App formats the schedule for the selected language. |
+| Register a household | Use an existing bot's registration flow | Three QR codes arrive, one each for plastic, paper and glass; the Mini App lists them when opened from Telegram. |
+| Open the Mini App | Tap the existing `EcoMap Mini App` Web App button in the bot chat | A responsive dashboard opens inside Telegram. Karakalpak is selected by default; card transitions and animated charts respect reduced-motion settings. |
+| Switch the language | Use the Mini App language toggle | Russian and Karakalpak can be selected and the preference is saved for that Telegram account. |
+| See the pickup schedule | Open the Mini App dashboard | Configured weekdays and material types appear in the selected language. |
 | Enable reminders | Mini App → `Esletpelerdi qosıw` / `Включить напоминания` | Preference is saved. At the configured local hour, a reminder is sent the evening before a scheduled pickup. The button toggles to disable reminders. |
 | Report a missed pickup | Mini App → `Alıp ketiwdi xabar etiw` / `Сообщить о пропуске` → select a bin → describe the issue | A numbered case is created and appears in `/myreports` and the Mini App. An open duplicate for the same bin is rejected. |
 | Report an illegal dump | Mini App → `Qoqıs haqqında xabar` / `Сообщить о свалке` → address → description → allow location | A numbered case with coordinates is saved and appears in `/myreports` and the Mini App. Location permission is required. |
@@ -46,10 +46,7 @@ This branch adds a pilot workflow for household recycling, collection operations
 
 ## Commands
 
-- Resident: `/start`, `/id`, `/language`, `/bins`, `/calendar`, `/missed`, `/sort`, `/impact`, `/myreports`, `/reminders`, `/reminders on`, `/reminders off`.
-- Collector: `/batch`, scan QR, enter weight, `/finishbatch`.
-- Recycler: `/accept ECO-YYYYMMDD-00001 12.5`.
-- Admin: `/issues`, `/dumps`, `/resolve_issue ID`, `/resolve_dump ID`.
+- The test service itself serves the Mini App APIs only; bot commands are handled by the one currently active bot poller. Use a dedicated test token before testing separate command handlers end-to-end.
 
 ## Pilot limitations to check with the project owner
 
@@ -58,7 +55,7 @@ This branch adds a pilot workflow for household recycling, collection operations
 - The first registration flow creates three household containers using one address, location and photo. Confirm that this matches the actual operating model before broader rollout.
 - Accepted kilograms are allocated proportionally across route pickups for the resident eco-balance. This is an estimate when the facility reports a different total weight; the per-bin weights remain available in collection events.
 - The Mini App dump-report form records address, description, and coordinates but does not upload a photo. Use the Telegram bot when photographic evidence is required.
-- Telegram bot messages and Telegram IDs are required for the pilot. Configure only test accounts and a test token in Railway.
+- The pilot service retains the configured token for Telegram Web App authentication but has polling disabled to avoid competing with the live bot. Use a separate test token to run a second bot poller and test bot commands independently.
 - This is an initial Karakalpak/Russian pilot translation. Review the Karakalpak wording with a native speaker before public launch.
 - Mini App APIs require a valid Telegram WebApp `initData` signature; opening the page in a regular browser without launching it from Telegram will not load user data.
 
