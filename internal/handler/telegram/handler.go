@@ -299,8 +299,9 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		sess.user.Address = strings.TrimSpace(msg.Text)
 		sess.step = stepBinLocation
 		location := tgbotapi.NewMessage(chatID, "📍 Отправьте геолокацию точки сбора.")
-		location.ReplyMarkup = tgbotapi.NewReplyKeyboard(tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButtonLocation("📍 Поделиться геолокацией")))
-		location.ReplyMarkup.ResizeKeyboard = true
+		keyboard := tgbotapi.NewReplyKeyboard(tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButtonLocation("📍 Поделиться геолокацией")))
+		keyboard.ResizeKeyboard = true
+		location.ReplyMarkup = keyboard
 		h.send(location)
 	case stepBinLocation:
 		if msg.Location == nil { h.reply(chatID, "📍 Нужна геолокация. Нажмите скрепку → Геопозиция."); return }

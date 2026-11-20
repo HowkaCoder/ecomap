@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ecomap/internal/domain/bin"
@@ -244,6 +245,6 @@ func (r *WorkflowRepo) ListReminderRecipients(ctx context.Context) ([]int64, err
 }
 
 func isUniqueViolation(err error) bool {
-	var pgErr *pgx.PgError
+	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
