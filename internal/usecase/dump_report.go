@@ -18,21 +18,21 @@ func NewDumpReportUsecase(users user.UserRepository, dumps dump.DumpRepository, 
 	return &DumpReportUsecase{users: users, dumps: dumps, photos: photos}
 }
 
-func (uc *DumpReportUsecase) Execute(ctx context.Context, input dto.DumpReportInput) error {
+func (uc *DumpReportUsecase) Execute(ctx context.Context, input dto.DumpReportInput) (uint64, error) {
 	u, err := uc.users.GetByTelegramID(ctx, input.TelegramID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if u == nil {
-		return ErrNotRegistered
+		return 0, ErrNotRegistered
 	}
 
 	photoPath, err := uc.photos.SaveTelegramPhoto(ctx, input.PhotoID, "dump_reports")
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	return uc.dumps.CreateDump(ctx, &dump.Dump{
+	report := &dump.Dump{
 		UserID:      u.ID,
 		PhotoURL:    photoPath,
 		Lat:         input.Lat,
@@ -41,5 +41,9 @@ func (uc *DumpReportUsecase) Execute(ctx context.Context, input dto.DumpReportIn
 		Landmark:    input.Landmark,
 		Description: input.Description,
 		Status:      input.Status,
-	})
+	}
+	if err := uc.dumps.CreateDump(ctx, report); err != nil {
+		return 0, err
+	}
+	return report.ID, nil
 }

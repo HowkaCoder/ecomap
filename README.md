@@ -9,11 +9,17 @@ Telegram bot that helps keep a city clean. Residents register their trash bins a
 
 ## How it works
 
-**Registration:** name → photo of the bin → location → the bot sends back a QR code that is printed and stuck on the bin.
+**Registration:** name → one representative photo → address → location. The bot creates three material-specific bins (plastic, paper/cardboard, glass) and sends a separate deep-link QR for each one.
 
 **My bins:** list of the user's bins with buttons «Full» / «Empty». Only the owner can change the status of a bin.
 
-**Dump report:** photo → location → address → landmark → description → severity. Reports are stored with coordinates for the city service.
+**Pickup workflow:** a collector opens a material batch with `/batch`, scans a bin QR, records its weight, and closes the batch with `/finishbatch`. A recycler confirms accepted weight with `/accept <batch-code> <kg>`. Residents can see verified accepted weight in `/impact`.
+
+**Collection calendar:** set `PICKUP_SCHEDULE=mon:plastic,tue:paper,fri:glass`. Residents can view it with `/calendar` and enable or disable reminders with `/reminders`. Timezone and reminder hour are configurable.
+
+**Missed pickup and dump reports:** residents can submit a missed-pickup issue or a dump report, then track its status with `/myreports`. Admins can list and close issues with `/issues`, `/dumps`, `/resolve_issue <id>`, and `/resolve_dump <id>`.
+
+**Sorting guide:** `/sort` explains the pilot's basic material rules.
 
 ## Architecture
 
@@ -56,6 +62,14 @@ go run ./cmd
 | `BOT_TOKEN` | Telegram bot token |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `STORAGE_DIR` | Where photos and QR codes are saved, `storage` by default |
+| `ADMIN_TELEGRAM_IDS` | Comma-separated Telegram IDs with full pilot access |
+| `COLLECTOR_TELEGRAM_IDS` | Comma-separated IDs allowed to record collections |
+| `RECYCLER_TELEGRAM_IDS` | Comma-separated IDs allowed to confirm accepted batch weight |
+| `PICKUP_SCHEDULE` | Weekly schedule, e.g. `mon:plastic,tue:paper,fri:glass` |
+| `TIMEZONE` | Schedule timezone, defaults to `Asia/Tashkent` |
+| `REMINDER_HOUR` | Local reminder hour, defaults to `19` |
+
+Railway exposes a public health endpoint at `/healthz`. When `BOT_TOKEN` is not set, the service stays healthy but waits for Telegram configuration; it does not start polling.
 
 ## Tests
 

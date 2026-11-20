@@ -8,6 +8,12 @@ import (
 	"ecomap/internal/dto"
 )
 
+type RegisteredBin struct {
+	Material string
+	QRCode   string
+	QRPath   string
+}
+
 type RegisterUserUseCase struct {
 	users  user.UserRepository
 	bins   bin.BinRepository
@@ -27,23 +33,28 @@ func (uc *RegisterUserUseCase) UserExists(ctx context.Context, telegramID int64)
 	return u != nil, nil
 }
 
-func (uc *RegisterUserUseCase) Execute(ctx context.Context, input dto.RegisterUserInput) (string, error) {
+func (uc *RegisterUserUseCase) Execute(ctx context.Context, input dto.RegisterUserInput) ([]RegisteredBin, error) {
 	existing, err := uc.users.GetByTelegramID(ctx, input.TelegramID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if existing != nil {
-		return "", ErrAlreadyRegistered
+		return nil, ErrAlreadyRegistered
 	}
 
 	photoPath, err := uc.photos.SaveTelegramPhoto(ctx, input.BinPhoto, "bins")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	code, qrPath, err := uc.qr.Generate()
-	if err != nil {
-		return "", err
+	materials := []string{bin.MaterialPlastic, bin.MaterialPaper, bin.MaterialGlass}
+	codes := make([]RegisteredBin, 0, len(materials))
+	for _, material := range materials {
+		code, qrPath, err := uc.qr.Generate()
+		if err != nil {
+			return nil, err
+		}
+		codes = append(codes, RegisteredBin{Material: material, QRCode: code, QRPath: qrPath})
 	}
 
 	u := &user.User{
@@ -52,24 +63,27 @@ func (uc *RegisterUserUseCase) Execute(ctx context.Context, input dto.RegisterUs
 		PhotoURL:   input.PhotoURL,
 	}
 	if err := uc.users.CreateUser(ctx, u); err != nil {
-		return "", err
+		return nil, err
 	}
 
-	b := &bin.Bin{
-		OwnerID:  u.ID,
-		QRCode:   code,
-		PhotoURL: photoPath,
-		Lat:      input.Lat,
-		Lon:      input.Lon,
-		Address:  input.Address,
-		Landmark: input.Landmark,
-		Status:   bin.StatusEmpty,
-	}
-	if err := uc.bins.Create(ctx, b); err != nil {
-		return "", err
+	for _, registered := range codes {
+		b := &bin.Bin{
+			OwnerID:  u.ID,
+			QRCode:   registered.QRCode,
+			PhotoURL: photoPath,
+			Lat:      input.Lat,
+			Lon:      input.Lon,
+			Address:  input.Address,
+			Landmark: input.Landmark,
+			Status:   bin.StatusEmpty,
+			Material: registered.Material,
+		}
+		if err := uc.bins.Create(ctx, b); err != nil {
+			return nil, err
+		}
 	}
 
-	return qrPath, nil
+	return codes, nil
 }
 
 func (uc *RegisterUserUseCase) GetUserBins(ctx context.Context, telegramID int64) ([]*bin.Bin, error) {

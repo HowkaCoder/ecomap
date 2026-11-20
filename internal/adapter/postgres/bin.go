@@ -10,7 +10,7 @@ import (
 	"ecomap/internal/domain/bin"
 )
 
-const binColumns = `id, owner_id, qr_code, photo_url, lat, lon, address, landmark, status, verified`
+const binColumns = `id, owner_id, qr_code, photo_url, lat, lon, address, landmark, status, verified, material`
 
 type BinRepo struct {
 	pool *pgxpool.Pool
@@ -22,7 +22,7 @@ func NewBinRepo(pool *pgxpool.Pool) *BinRepo {
 
 func scanBin(row pgx.Row) (*bin.Bin, error) {
 	b := &bin.Bin{}
-	err := row.Scan(&b.ID, &b.OwnerID, &b.QRCode, &b.PhotoURL, &b.Lat, &b.Lon, &b.Address, &b.Landmark, &b.Status, &b.Verified)
+	err := row.Scan(&b.ID, &b.OwnerID, &b.QRCode, &b.PhotoURL, &b.Lat, &b.Lon, &b.Address, &b.Landmark, &b.Status, &b.Verified, &b.Material)
 	if err != nil {
 		return nil, err
 	}
@@ -31,10 +31,10 @@ func scanBin(row pgx.Row) (*bin.Bin, error) {
 
 func (r *BinRepo) Create(ctx context.Context, b *bin.Bin) error {
 	return r.pool.QueryRow(ctx, `
-		INSERT INTO bins (owner_id, qr_code, photo_url, lat, lon, address, landmark, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO bins (owner_id, qr_code, photo_url, lat, lon, address, landmark, status, material)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id
-	`, b.OwnerID, b.QRCode, b.PhotoURL, b.Lat, b.Lon, b.Address, b.Landmark, b.Status).Scan(&b.ID)
+	`, b.OwnerID, b.QRCode, b.PhotoURL, b.Lat, b.Lon, b.Address, b.Landmark, b.Status, b.Material).Scan(&b.ID)
 }
 
 func (r *BinRepo) GetByID(ctx context.Context, id uint64) (*bin.Bin, error) {

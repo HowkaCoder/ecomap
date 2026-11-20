@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"ecomap/internal/domain/bin"
@@ -87,7 +88,7 @@ type fakeQR struct{ n int }
 
 func (f *fakeQR) Generate() (string, string, error) {
 	f.n++
-	return "code", "storage/qr/code.png", nil
+	return fmt.Sprintf("code-%d", f.n), fmt.Sprintf("storage/qr/code-%d.png", f.n), nil
 }
 
 type fakePhotos struct{ err error }
@@ -104,16 +105,16 @@ func TestRegister(t *testing.T) {
 	users, bins := newFakeUsers(), newFakeBins()
 	uc := NewRegisterUserUseCase(users, bins, &fakeQR{}, &fakePhotos{})
 
-	qrPath, err := uc.Execute(ctx, dto.RegisterUserInput{TelegramID: 100, FullName: "Ali", BinPhoto: "p1", Lat: 42.4, Lon: 59.6})
+	registered, err := uc.Execute(ctx, dto.RegisterUserInput{TelegramID: 100, FullName: "Ali", BinPhoto: "p1", Lat: 42.4, Lon: 59.6})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if qrPath == "" {
-		t.Fatal("empty qr path")
+	if len(registered) != 3 {
+		t.Fatalf("expected three material QR codes, got %d", len(registered))
 	}
 
 	got, _ := uc.GetUserBins(ctx, 100)
-	if len(got) != 1 || got[0].QRCode != "code" || got[0].Status != bin.StatusEmpty {
+	if len(got) != 3 || got[0].QRCode == "" || got[0].Status != bin.StatusEmpty {
 		t.Fatalf("unexpected bins: %+v", got)
 	}
 
@@ -156,8 +157,12 @@ func TestUpdateBinStatusChecksOwner(t *testing.T) {
 	}
 
 	bins, _ := uc.GetUserBins(ctx, 1)
-	if bins[0].Status != bin.StatusFull {
-		t.Fatalf("status not updated: %s", bins[0].Status)
+	var updated *bin.Bin
+	for _, item := range bins {
+		if item.ID == 1 { updated = item; break }
+	}
+	if updated == nil || updated.Status != bin.StatusFull {
+		t.Fatalf("status not updated: %+v", updated)
 	}
 }
 
@@ -171,7 +176,7 @@ func TestDumpReport(t *testing.T) {
 	}
 
 	users.CreateUser(ctx, &user.User{TelegramID: 5})
-	err := uc.Execute(ctx, dto.DumpReportInput{TelegramID: 5, PhotoID: "x", Lat: 1, Lon: 2, Description: "garbage"})
+	_, err := uc.Execute(ctx, dto.DumpReportInput{TelegramID: 5, PhotoID: "x", Lat: 1, Lon: 2, Description: "garbage"})
 	if err != nil {
 		t.Fatal(err)
 	}

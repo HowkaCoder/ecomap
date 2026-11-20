@@ -1,6 +1,7 @@
 package qr
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -9,11 +10,12 @@ import (
 )
 
 type Service struct {
-	dir string
+	dir         string
+	botUsername string
 }
 
-func New(basePath string) *Service {
-	return &Service{dir: filepath.Join(basePath, "qr")}
+func New(basePath, botUsername string) *Service {
+	return &Service{dir: filepath.Join(basePath, "qr"), botUsername: botUsername}
 }
 
 func (s *Service) Generate() (string, string, error) {
@@ -23,7 +25,11 @@ func (s *Service) Generate() (string, string, error) {
 
 	code := uuid.NewString()
 	path := filepath.Join(s.dir, code+".png")
-	if err := qrcode.WriteFile(code, qrcode.Medium, 256, path); err != nil {
+	payload := code
+	if s.botUsername != "" {
+		payload = fmt.Sprintf("https://t.me/%s?start=pickup_%s", s.botUsername, code)
+	}
+	if err := qrcode.WriteFile(payload, qrcode.Medium, 256, path); err != nil {
 		return "", "", err
 	}
 	return code, path, nil

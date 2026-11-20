@@ -3,6 +3,10 @@ package bin
 const (
 	StatusEmpty = "Пустая"
 	StatusFull  = "Нужна уборка"
+	MaterialPlastic = "plastic"
+	MaterialPaper   = "paper"
+	MaterialGlass   = "glass"
+	MaterialMixed   = "mixed"
 )
 
 type Bin struct {
@@ -16,4 +20,5 @@ type Bin struct {
 	Landmark string
 	Verified bool
 	Status   string
+	Material string
 }
