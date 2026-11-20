@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -105,6 +106,9 @@ func New(db *pgxpool.Pool, botToken, adminIDs, schedule, timezone string) http.H
 	mux.HandleFunc("GET /api/miniapp/summary", a.withIdentity(a.summary))
 	mux.HandleFunc("GET /api/miniapp/admin/stats", a.withIdentity(a.adminStats))
 	mux.HandleFunc("POST /api/miniapp/language", a.withIdentity(a.setLanguage))
+	mux.HandleFunc("POST /api/miniapp/reminders", a.withIdentity(a.setReminders))
+	mux.HandleFunc("POST /api/miniapp/pickup-issues", a.withIdentity(a.createPickupIssue))
+	mux.HandleFunc("POST /api/miniapp/dump-reports", a.withIdentity(a.createDumpReport))
 	return securityHeaders(mux)
 }
 
@@ -216,16 +220,17 @@ func (a *App) summary(w http.ResponseWriter, r *http.Request, user identity) {
 		IsAdmin     bool    `json:"isAdmin"`
 		Schedule    string  `json:"schedule"`
 		Timezone    string  `json:"timezone"`
+		RemindersEnabled bool `json:"remindersEnabled"`
 		ResidentBins []ResidentBin `json:"residentBins"`
 		Reports []ResidentReport `json:"reports"`
 	}
 	result.TelegramID, result.IsAdmin = user.ID, a.admins[user.ID]
 	result.Language, result.Schedule, result.Timezone = "kaa", a.schedule, a.timezone
 	if err := a.db.QueryRow(ctx, `
-		SELECT u.full_name, COALESCE(p.language, 'kaa')
+		SELECT u.full_name, COALESCE(p.language, 'kaa'), u.reminders_enabled
 		FROM users u LEFT JOIN user_preferences p ON p.telegram_id = u.telegram_id
 		WHERE u.telegram_id = $1
-	`, user.ID).Scan(&result.Name, &result.Language); err == nil {
+	`, user.ID).Scan(&result.Name, &result.Language, &result.RemindersEnabled); err == nil {
 		result.Registered = true
 	} else {
 		_ = a.db.QueryRow(ctx, `SELECT COALESCE((SELECT language FROM user_preferences WHERE telegram_id = $1), 'kaa')`, user.ID).Scan(&result.Language)
@@ -302,6 +307,101 @@ func (a *App) summary(w http.ResponseWriter, r *http.Request, user identity) {
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (a *App) setReminders(w http.ResponseWriter, r *http.Request, user identity) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	result, err := a.db.Exec(ctx, `UPDATE users SET reminders_enabled = $1 WHERE telegram_id = $2`, body.Enabled, user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "reminders_update_failed"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "household_not_registered"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": body.Enabled})
+}
+
+func (a *App) createPickupIssue(w http.ResponseWriter, r *http.Request, user identity) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var body struct {
+		BinID uint64 `json:"binId"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048)).Decode(&body); err != nil || body.BinID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	body.Description = strings.TrimSpace(body.Description)
+	if len(body.Description) < 4 || len(body.Description) > 500 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "description_length"})
+		return
+	}
+	var issueID uint64
+	err := a.db.QueryRow(ctx, `
+		INSERT INTO pickup_issues (user_id, bin_id, description)
+		SELECT u.id, b.id, $3 FROM users u JOIN bins b ON b.owner_id = u.id
+		WHERE u.telegram_id = $1 AND b.id = $2
+		AND NOT EXISTS (
+			SELECT 1 FROM pickup_issues i WHERE i.bin_id = b.id AND i.status <> 'resolved'
+		)
+		RETURNING id
+	`, user.ID, body.BinID, body.Description).Scan(&issueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "bin_unavailable_or_issue_open"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "pickup_issue_create_failed"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]uint64{"id": issueID})
+}
+
+func (a *App) createDumpReport(w http.ResponseWriter, r *http.Request, user identity) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var body struct {
+		Address string `json:"address"`
+		Description string `json:"description"`
+		Latitude float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
+		return
+	}
+	body.Address = strings.TrimSpace(body.Address)
+	body.Description = strings.TrimSpace(body.Description)
+	if len(body.Address) < 3 || len(body.Address) > 300 || len(body.Description) < 4 || len(body.Description) > 500 || body.Latitude < -90 || body.Latitude > 90 || body.Longitude < -180 || body.Longitude > 180 || (body.Latitude == 0 && body.Longitude == 0) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_report_fields"})
+		return
+	}
+	var reportID uint64
+	err := a.db.QueryRow(ctx, `
+		INSERT INTO dumps (user_id, photo_url, lat, lon, address, description)
+		SELECT id, '', $2, $3, $4, $5 FROM users WHERE telegram_id = $1
+		RETURNING id
+	`, user.ID, body.Latitude, body.Longitude, body.Address, body.Description).Scan(&reportID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "household_not_registered"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "dump_report_create_failed"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]uint64{"id": reportID})
 }
 
 func (a *App) setLanguage(w http.ResponseWriter, r *http.Request, user identity) {

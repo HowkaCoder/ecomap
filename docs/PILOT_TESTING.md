@@ -1,6 +1,6 @@
 # EcoMap Bin4Home pilot: test guide
 
-This branch adds a pilot workflow for household recycling, collection operations, and a Telegram Mini App. It is isolated from the production branch and database. The Mini App opens from `/start`; Karakalpak is the default language, with Russian available from `🗣 Til / Язык` or the language toggle in the app.
+This branch adds a pilot workflow for household recycling, collection operations, and a Telegram Mini App. It is isolated from the production branch and database. The Mini App opens from `/start`; Karakalpak is the default language, with Russian available from `🗣 Til / Язык` or the language toggle in the app. Residents can report a missed pickup, report an illegal dump with location, and manage reminders directly in the Mini App.
 
 ## Before the first Telegram test
 
@@ -20,9 +20,9 @@ This branch adds a pilot workflow for household recycling, collection operations
 | Open the Mini App | Tap `EcoMap Mini App` under `/start` | A responsive dashboard opens inside Telegram. Karakalpak is selected by default; card transitions and animated charts respect reduced-motion settings. |
 | Switch the language | Tap `🗣 Til / Язык` or the Mini App language toggle | Russian and Karakalpak can be selected; the Mini App remembers the choice and the bot stores it for that Telegram account. |
 | See the pickup schedule | Open `Alıp ketiw kestesi` or send `/calendar` | Configured weekdays and material types appear; the Mini App formats the schedule for the selected language. |
-| Enable reminders | `/reminders` → enable button | Preference is saved. At the configured local hour, a reminder is sent the evening before a scheduled pickup. |
-| Report a missed pickup | `Alıp ketpedi` → select a bin → describe the issue | A numbered case is created and appears in `/myreports` and the Mini App. |
-| Report an illegal dump | `Qoqıs haqqında xabar` → photo → location → address → landmark → description → urgency | Case number is returned and the report appears in `/myreports` and the Mini App. |
+| Enable reminders | Mini App → `Esletpelerdi qosıw` / `Включить напоминания` | Preference is saved. At the configured local hour, a reminder is sent the evening before a scheduled pickup. The button toggles to disable reminders. |
+| Report a missed pickup | Mini App → `Alıp ketiwdi xabar etiw` / `Сообщить о пропуске` → select a bin → describe the issue | A numbered case is created and appears in `/myreports` and the Mini App. An open duplicate for the same bin is rejected. |
+| Report an illegal dump | Mini App → `Qoqıs haqqında xabar` / `Сообщить о свалке` → address → description → allow location | A numbered case with coordinates is saved and appears in `/myreports` and the Mini App. Location permission is required. |
 | Read the sorting guide | `Qalay sortlaw?` or `/sort` | Guidance for plastic, paper and glass appears. |
 | Check verified eco-balance | `/impact` | Shows no value until a recycler records accepted kilograms; then shows accepted weight by material. |
 
@@ -57,6 +57,7 @@ This branch adds a pilot workflow for household recycling, collection operations
 - The schedule is shared at service level, not assigned to individual neighborhoods.
 - The first registration flow creates three household containers using one address, location and photo. Confirm that this matches the actual operating model before broader rollout.
 - Accepted kilograms are allocated proportionally across route pickups for the resident eco-balance. This is an estimate when the facility reports a different total weight; the per-bin weights remain available in collection events.
+- The Mini App dump-report form records address, description, and coordinates but does not upload a photo. Use the Telegram bot when photographic evidence is required.
 - Telegram bot messages and Telegram IDs are required for the pilot. Configure only test accounts and a test token in Railway.
 - This is an initial Karakalpak/Russian pilot translation. Review the Karakalpak wording with a native speaker before public launch.
 - Mini App APIs require a valid Telegram WebApp `initData` signature; opening the page in a regular browser without launching it from Telegram will not load user data.
