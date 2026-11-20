@@ -225,18 +225,12 @@ func (h *Handler) sendWelcome(chatID, userID int64) {
 	m.ReplyMarkup = mainMenu(h.language(userID))
 	h.send(m)
 	if h.miniAppURL != "" {
-		rows := [][]tgbotapi.InlineKeyboardButton{{{
-			Text: btnMiniApp,
-			WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL},
-		}}}
+		rows := [][]map[string]interface{}{{webAppButton(btnMiniApp, h.miniAppURL)}}
 		if h.isAdmin(userID) {
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.InlineKeyboardButton{
-				Text: btnStats,
-				WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL + "?page=admin"},
-			}))
+			rows = append(rows, []map[string]interface{}{webAppButton(btnStats, h.miniAppURL+"?page=admin")})
 		}
 		appMessage := tgbotapi.NewMessage(chatID, "🌿 EcoMap Mini App · úy konteynerleri, kestesi hám eko-balans.")
-		appMessage.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+		appMessage.ReplyMarkup = map[string]interface{}{"inline_keyboard": rows}
 		h.send(appMessage)
 	}
 }
@@ -251,10 +245,7 @@ func (h *Handler) showAdminStats(chatID, userID int64) {
 		return
 	}
 	m := tgbotapi.NewMessage(chatID, "📊 Tolıq statistika hám operaciyalıq kórsetkishler:")
-	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.InlineKeyboardButton{
-		Text: btnStats,
-		WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL + "?page=admin"},
-	}))
+	m.ReplyMarkup = map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{webAppButton(btnStats, h.miniAppURL+"?page=admin")}}}
 	h.send(m)
 }
 
@@ -736,6 +727,10 @@ func mainMenu(language string) tgbotapi.ReplyKeyboardMarkup {
 	)
 	m.ResizeKeyboard = true
 	return m
+}
+
+func webAppButton(text, url string) map[string]interface{} {
+	return map[string]interface{}{"text": text, "web_app": map[string]string{"url": url}}
 }
 
 func parseBinCallback(data string) (uint64, string, bool) {

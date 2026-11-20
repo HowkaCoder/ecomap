@@ -77,6 +77,15 @@ func (h *Handler) setLanguageCache(telegramID int64, language string) {
 	h.mu.Unlock()
 }
 
+func (h *Handler) language(telegramID int64) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if language := h.languages[telegramID]; language != "" {
+		return language
+	}
+	return "kaa"
+}
+
 func (h *Handler) localize(chatID int64, message string) string {
 	h.mu.Lock()
 	language := h.languages[chatID]
