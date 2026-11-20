@@ -244,6 +244,22 @@ func (r *WorkflowRepo) ListReminderRecipients(ctx context.Context) ([]int64, err
 	return out, rows.Err()
 }
 
+func (r *WorkflowRepo) GetLanguage(ctx context.Context, telegramID int64) (string, error) {
+	var language string
+	err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT language FROM user_preferences WHERE telegram_id = $1), 'kaa')
+	`, telegramID).Scan(&language)
+	return language, err
+}
+
+func (r *WorkflowRepo) SetLanguage(ctx context.Context, telegramID int64, language string) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO user_preferences (telegram_id, language, updated_at) VALUES ($1, $2, now())
+		ON CONFLICT (telegram_id) DO UPDATE SET language = EXCLUDED.language, updated_at = now()
+	`, telegramID, language)
+	return err
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

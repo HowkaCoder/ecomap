@@ -18,4 +18,6 @@ type Repository interface {
 	ResolveDump(context.Context, uint64) error
 	SetReminders(context.Context, int64, bool) error
 	ListReminderRecipients(context.Context) ([]int64, error)
+	GetLanguage(context.Context, int64) (string, error)
+	SetLanguage(context.Context, int64, string) error
 }

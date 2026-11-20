@@ -21,6 +21,8 @@ Telegram bot that helps keep a city clean. Residents register their trash bins a
 
 **Sorting guide:** `/sort` explains the pilot's basic material rules.
 
+**Telegram Mini App:** `/start` shows the responsive animated EcoMap dashboard. Telegram WebApp `initData` is verified server-side before profile or analytics data is returned. Karakalpak is the default; residents can switch to Russian from `🗣 Til / Язык` or in the Mini App. Admins receive a separate `📊 Statistika` button and `/stats` command. The admin page shows household/bin totals, open reports, collected and accepted kilograms, a 7-day bar chart, and accepted material mix.
+
 ## Architecture
 
 Clean architecture with ports and adapters. Business logic does not know about Telegram or PostgreSQL:
@@ -28,14 +30,15 @@ Clean architecture with ports and adapters. Business logic does not know about T
 ```
 cmd/                      entrypoint, wiring, graceful shutdown
 internal/
-  domain/                 entities and repository interfaces (user, bin, dump)
-  usecase/                registration, bin status, dump reports
+  domain/                 entities and repository interfaces (user, bin, dump, collection workflow)
+  usecase/                registration, bin status, dump reports, collection workflow
   dto/                    input data for use cases
   adapter/
     postgres/             repositories on pgx
     photo/                downloads photos from Telegram
     qr/                   generates QR codes
-  handler/telegram/       conversation state machine
+  handler/telegram/       localized bot conversations and role-based commands
+  handler/webapp/         responsive Mini App, Telegram initData auth, resident/admin APIs
 migrations/               database schema
 ```
 
@@ -68,6 +71,7 @@ go run ./cmd
 | `PICKUP_SCHEDULE` | Weekly schedule, e.g. `mon:plastic,tue:paper,fri:glass` |
 | `TIMEZONE` | Schedule timezone, defaults to `Asia/Tashkent` |
 | `REMINDER_HOUR` | Local reminder hour, defaults to `19` |
+| `MINI_APP_URL` | Optional public Mini App URL; otherwise derived from Railway's public domain |
 
 Railway exposes a public health endpoint at `/healthz`. When `BOT_TOKEN` is not set, the service stays healthy but waits for Telegram configuration; it does not start polling.
 

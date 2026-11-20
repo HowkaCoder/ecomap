@@ -17,6 +17,7 @@ var (
 	ErrInvalidWeight   = errors.New("weight must be between 0 and 1000 kg")
 	ErrMaterialMismatch = errors.New("bin material does not match batch")
 	ErrInvalidMaterial = errors.New("unsupported material")
+	ErrInvalidLanguage = errors.New("unsupported language")
 )
 
 type WorkflowUseCase struct {
@@ -138,6 +139,17 @@ func (uc *WorkflowUseCase) SetReminders(ctx context.Context, telegramID int64, e
 
 func (uc *WorkflowUseCase) ReminderRecipients(ctx context.Context) ([]int64, error) {
 	return uc.repo.ListReminderRecipients(ctx)
+}
+
+func (uc *WorkflowUseCase) Language(ctx context.Context, telegramID int64) (string, error) {
+	return uc.repo.GetLanguage(ctx, telegramID)
+}
+
+func (uc *WorkflowUseCase) SetLanguage(ctx context.Context, telegramID int64, language string) error {
+	if language != "kaa" && language != "ru" {
+		return ErrInvalidLanguage
+	}
+	return uc.repo.SetLanguage(ctx, telegramID, language)
 }
 
 func (uc *WorkflowUseCase) MaterialLabel(material string) string {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -37,16 +38,19 @@ const (
 )
 
 const (
-	btnRegister = "🧍 Регистрация"
-	btnDump     = "🗑 Сообщить о свалке"
-	btnHelp     = "ℹ️ Помощь"
-	btnMyBins   = "♻️ Мои контейнеры"
-	btnSchedule = "🚚 График вывоза"
-	btnMissed   = "⚠️ Не забрали"
-	btnImpact   = "🌱 Экобаланс"
-	btnSort     = "🧭 Что куда?"
-	btnIssues   = "📋 Мои обращения"
-	btnReminders = "🔔 Напоминания"
+	btnRegister  = "🧍 Úydi qosıw"
+	btnDump      = "🗑 Qoqıs haqqında xabar"
+	btnHelp      = "ℹ️ Kómek"
+	btnMyBins    = "♻️ Meniń konteynerlerim"
+	btnSchedule  = "🚚 Alıp ketiw kestesi"
+	btnMissed    = "⚠️ Alıp ketpedi"
+	btnImpact    = "🌱 Eko-balans"
+	btnSort      = "🧭 Qalay sortlaw?"
+	btnIssues    = "📋 Meniń múrájatlarım"
+	btnReminders = "🔔 Esletpeler"
+	btnLanguage  = "🗣 Til / Язык"
+	btnMiniApp   = "🌿 EcoMap Mini App"
+	btnStats     = "📊 Statistika"
 )
 
 type Config struct {
@@ -56,6 +60,7 @@ type Config struct {
 	Schedule     string
 	Timezone     string
 	ReminderHour int
+	MiniAppURL string
 }
 
 type session struct {
@@ -78,6 +83,8 @@ type Handler struct {
 	schedule   map[time.Weekday][]string
 	location   *time.Location
 	reminderHour int
+	miniAppURL string
+	languages  map[int64]string
 
 	mu       sync.Mutex
 	sessions map[int64]*session
@@ -86,7 +93,7 @@ type Handler struct {
 func New(bot *tgbotapi.BotAPI, registerUC *usecase.RegisterUserUseCase, dumpUC *usecase.DumpReportUsecase, workflowUC *usecase.WorkflowUseCase, cfg Config) *Handler {
 	location, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
-		location, _ = time.LoadLocation("Asia/Tashkent")
+		location = time.FixedZone("Asia/Tashkent", 5*60*60)
 	}
 	if cfg.ReminderHour < 0 || cfg.ReminderHour > 23 {
 		cfg.ReminderHour = 19
@@ -94,8 +101,8 @@ func New(bot *tgbotapi.BotAPI, registerUC *usecase.RegisterUserUseCase, dumpUC *
 	h := &Handler{
 		bot: bot, registerUC: registerUC, dumpUC: dumpUC, workflowUC: workflowUC,
 		admins: parseIDs(cfg.Admins), collectors: parseIDs(cfg.Collectors), recyclers: parseIDs(cfg.Recyclers),
-		schedule: parseSchedule(cfg.Schedule), location: location, reminderHour: cfg.ReminderHour,
-		sessions: make(map[int64]*session),
+		schedule: parseSchedule(cfg.Schedule), location: location, reminderHour: cfg.ReminderHour, miniAppURL: cfg.MiniAppURL,
+		sessions: make(map[int64]*session), languages: make(map[int64]string),
 	}
 	return h
 }
@@ -120,6 +127,12 @@ func (h *Handler) Start(ctx context.Context) {
 }
 
 func (h *Handler) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	if update.Message != nil && update.Message.From != nil {
+		h.loadLanguage(ctx, update.Message.From.ID)
+	}
+	if update.CallbackQuery != nil {
+		h.loadLanguage(ctx, update.CallbackQuery.From.ID)
+	}
 	switch {
 	case update.CallbackQuery != nil:
 		h.handleCallback(ctx, update.CallbackQuery)
@@ -139,9 +152,9 @@ func (h *Handler) send(c tgbotapi.Chattable) {
 }
 
 func (h *Handler) reply(chatID int64, text string) {
-	m := tgbotapi.NewMessage(chatID, text)
+	m := tgbotapi.NewMessage(chatID, h.localize(chatID, text))
 	m.ParseMode = tgbotapi.ModeHTML
-	m.ReplyMarkup = mainMenu()
+	m.ReplyMarkup = mainMenu(h.language(chatID))
 	h.send(m)
 }
 
@@ -158,9 +171,11 @@ func (h *Handler) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 			h.beginPickup(ctx, msg.Chat.ID, msg.From.ID, strings.TrimPrefix(args[0], "pickup_"))
 			return
 		}
-		h.sendWelcome(msg.Chat.ID)
+		h.sendWelcome(msg.Chat.ID, msg.From.ID)
 	case "help":
 		h.showHelp(msg.Chat.ID)
+	case "language":
+		h.showLanguage(msg.Chat.ID)
 	case "id":
 		h.reply(msg.Chat.ID, fmt.Sprintf("Ваш Telegram ID: <code>%d</code>", msg.From.ID))
 	case "bins":
@@ -193,15 +208,53 @@ func (h *Handler) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		h.resolveDump(ctx, msg.Chat.ID, msg.From.ID, args)
 	case "admin":
 		h.showAdminHelp(msg.Chat.ID, msg.From.ID)
+	case "stats":
+		h.showAdminStats(msg.Chat.ID, msg.From.ID)
 	default:
 		h.reply(msg.Chat.ID, "Не понял команду. Откройте /help.")
 	}
 }
 
-func (h *Handler) sendWelcome(chatID int64) {
-	m := tgbotapi.NewMessage(chatID, "🌿 <b>EcoMap · Bin4Home</b>\n\nРазделяйте пластик, бумагу и стекло. Мы покажем график вывоза, примем обращения и будем отмечать подтверждённый вес материала.")
+func (h *Handler) sendWelcome(chatID, userID int64) {
+	text := "🌿 <b>EcoMap · Bin4Home</b>\n\nPlastik, qaǵaz hám shiyshe bólek jıynaladı. Alıp ketiw kestesi, múrájatlar hám qayta islewge tapsırılǵan salmaq — bári bir jerde."
+	if h.language(userID) == "ru" {
+		text = "🌿 <b>EcoMap · Bin4Home</b>\n\nРаздельный сбор пластика, бумаги и стекла. График вывоза, обращения и подтверждённый вес переработки — в одном месте."
+	}
+	m := tgbotapi.NewMessage(chatID, text)
 	m.ParseMode = tgbotapi.ModeHTML
-	m.ReplyMarkup = mainMenu()
+	m.ReplyMarkup = mainMenu(h.language(userID))
+	h.send(m)
+	if h.miniAppURL != "" {
+		rows := [][]tgbotapi.InlineKeyboardButton{{{
+			Text: btnMiniApp,
+			WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL},
+		}}}
+		if h.isAdmin(userID) {
+			rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.InlineKeyboardButton{
+				Text: btnStats,
+				WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL + "?page=admin"},
+			}))
+		}
+		appMessage := tgbotapi.NewMessage(chatID, "🌿 EcoMap Mini App · úy konteynerleri, kestesi hám eko-balans.")
+		appMessage.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+		h.send(appMessage)
+	}
+}
+
+func (h *Handler) showAdminStats(chatID, userID int64) {
+	if !h.isAdmin(userID) {
+		h.reply(chatID, "Bul bet tek administrator ushın.")
+		return
+	}
+	if h.miniAppURL == "" {
+		h.reply(chatID, "Mini App URL sazlanbaǵan.")
+		return
+	}
+	m := tgbotapi.NewMessage(chatID, "📊 Tolıq statistika hám operaciyalıq kórsetkishler:")
+	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.InlineKeyboardButton{
+		Text: btnStats,
+		WebApp: &tgbotapi.WebAppInfo{URL: h.miniAppURL + "?page=admin"},
+	}))
 	h.send(m)
 }
 
@@ -212,36 +265,39 @@ func (h *Handler) showHelp(chatID int64) {
 func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 	switch msg.Text {
-	case btnMyBins:
+	case btnMyBins, "♻️ Мои контейнеры":
 		h.dropSession(chatID)
 		h.showUserBins(ctx, chatID, msg.From.ID)
 		return
-	case btnDump:
+	case btnDump, "🗑 Сообщить о свалке":
 		h.startDumpReport(chatID, msg.From.ID)
 		return
-	case btnHelp:
+	case btnHelp, "ℹ️ Помощь":
 		h.dropSession(chatID)
 		h.showHelp(chatID)
 		return
-	case btnSchedule:
+	case btnSchedule, "🚚 График вывоза":
 		h.showSchedule(chatID)
 		return
-	case btnMissed:
+	case btnMissed, "⚠️ Не забрали":
 		h.startMissedPickup(ctx, chatID, msg.From.ID)
 		return
-	case btnImpact:
+	case btnImpact, "🌱 Экобаланс":
 		h.showImpact(ctx, chatID, msg.From.ID)
 		return
-	case btnSort:
+	case btnSort, "🧭 Что куда?":
 		h.showSortingGuide(chatID)
 		return
-	case btnIssues:
+	case btnIssues, "📋 Мои обращения":
 		h.showUserReports(ctx, chatID, msg.From.ID)
 		return
-	case btnReminders:
+	case btnReminders, "🔔 Напоминания":
 		h.handleReminders(ctx, chatID, msg.From.ID, nil)
 		return
-	case btnRegister:
+	case btnLanguage, "🗣 Язык / Til":
+		h.showLanguage(chatID)
+		return
+	case btnRegister, "🧍 Регистрация":
 		h.startRegistration(chatID, msg.From.ID)
 		return
 	}
@@ -250,8 +306,8 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	sess, ok := h.sessions[chatID]
 	h.mu.Unlock()
 	if !ok {
-		m := tgbotapi.NewMessage(chatID, "Нажмите /start, чтобы открыть меню.")
-		m.ReplyMarkup = mainMenu()
+		m := h.newMessage(chatID, "Нажмите /start, чтобы открыть меню.")
+		m.ReplyMarkup = mainMenu(h.language(chatID))
 		h.send(m)
 		return
 	}
@@ -298,7 +354,7 @@ func (h *Handler) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	case stepBinAddress:
 		sess.user.Address = strings.TrimSpace(msg.Text)
 		sess.step = stepBinLocation
-		location := tgbotapi.NewMessage(chatID, "📍 Отправьте геолокацию точки сбора.")
+		location := h.newMessage(chatID, "📍 Отправьте геолокацию точки сбора.")
 		keyboard := tgbotapi.NewReplyKeyboard(tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButtonLocation("📍 Поделиться геолокацией")))
 		keyboard.ResizeKeyboard = true
 		location.ReplyMarkup = keyboard
@@ -351,6 +407,18 @@ func (h *Handler) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery
 		h.showUserReports(ctx, chatID, userID)
 	case data == "menu_reminders":
 		h.handleReminders(ctx, chatID, userID, nil)
+	case data == "language_kaa" || data == "language_ru":
+		language := strings.TrimPrefix(data, "language_")
+		if err := h.workflowUC.SetLanguage(ctx, userID, language); err != nil {
+			h.reply(chatID, "Til saqlanbadı.")
+			return
+		}
+		h.setLanguageCache(userID, language)
+		if language == "ru" {
+			h.reply(chatID, "Выбран русский язык.")
+		} else {
+			h.reply(chatID, "Qaraqalpaq tili tańlandı.")
+		}
 	case data == "menu_batch":
 		h.startBatch(ctx, chatID, userID)
 	case strings.HasPrefix(data, "batch_material_"):
@@ -432,7 +500,7 @@ func (h *Handler) showUserBins(ctx context.Context, chatID, telegramID int64) {
 			tgbotapi.NewInlineKeyboardButtonData("🟢 Пустой", fmt.Sprintf("bin_empty_%d", b.ID)),
 		))
 	}
-	m := tgbotapi.NewMessage(chatID, "♻️ <b>Контейнеры дома</b>\n\n"+strings.Join(lines, "\n"))
+	m := h.newMessage(chatID, "♻️ <b>Контейнерлер úyde</b>\n\n"+strings.Join(lines, "\n"))
 	m.ParseMode = tgbotapi.ModeHTML
 	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	h.send(m)
@@ -479,7 +547,7 @@ func (h *Handler) startMissedPickup(ctx context.Context, chatID, telegramID int6
 	for _, b := range bins {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(materialLabel(b.Material)+" · #"+strconv.FormatUint(b.ID, 10), "issue_bin_"+strconv.FormatUint(b.ID, 10))))
 	}
-	m := tgbotapi.NewMessage(chatID, "⚠️ Выберите контейнер, который не забрали:")
+	m := h.newMessage(chatID, "⚠️ Выберите контейнер, который не забрали:")
 	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	h.send(m)
 }
@@ -513,7 +581,7 @@ func (h *Handler) startBatch(ctx context.Context, chatID int64, userID int64) {
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("📄 Бумага", "batch_material_"+bin.MaterialPaper)),
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("🍾 Стекло", "batch_material_"+bin.MaterialGlass)),
 	}
-	m := tgbotapi.NewMessage(chatID, "Выберите фракцию для нового рейса:")
+	m := h.newMessage(chatID, "Выберите фракцию для нового рейса:")
 	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	h.send(m)
 }
@@ -550,9 +618,9 @@ func (h *Handler) showOpenIssues(ctx context.Context, chatID, userID int64) {
 	if err != nil { h.reply(chatID, "Не удалось загрузить заявки."); return }
 	if len(items) == 0 { h.reply(chatID, "Открытых заявок о пропуске вывоза нет."); return }
 	for _, item := range items {
-		m := tgbotapi.NewMessage(chatID, fmt.Sprintf("⚠️ #%d · контейнер #%d · %s\n%s\n%s", item.ID, item.BinID, materialLabel(item.Material), html.EscapeString(item.Address), html.EscapeString(item.Description)))
+		m := h.newMessage(chatID, fmt.Sprintf("⚠️ #%d · контейнер #%d · %s\n%s\n%s", item.ID, item.BinID, materialLabel(item.Material), html.EscapeString(item.Address), html.EscapeString(item.Description)))
 		m.ParseMode = tgbotapi.ModeHTML
-		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("✅ Закрыть заявку", fmt.Sprintf("resolve_issue_%d", item.ID))))
+		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("✅ Múrájattı jabıw", fmt.Sprintf("resolve_issue_%d", item.ID))))
 		h.send(m)
 	}
 }
@@ -563,9 +631,9 @@ func (h *Handler) showOpenDumps(ctx context.Context, chatID, userID int64) {
 	if err != nil { h.reply(chatID, "Не удалось загрузить обращения."); return }
 	if len(items) == 0 { h.reply(chatID, "Открытых сообщений о свалках нет."); return }
 	for _, item := range items {
-		m := tgbotapi.NewMessage(chatID, fmt.Sprintf("🗑 #%d · %s\n%s", item.ID, html.EscapeString(item.Address), html.EscapeString(item.Description)))
+		m := h.newMessage(chatID, fmt.Sprintf("🗑 #%d · %s\n%s", item.ID, html.EscapeString(item.Address), html.EscapeString(item.Description)))
 		m.ParseMode = tgbotapi.ModeHTML
-		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("✅ Отметить устранённым", fmt.Sprintf("resolve_dump_%d", item.ID))))
+		m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("✅ Tazalandı dep belgilew", fmt.Sprintf("resolve_dump_%d", item.ID))))
 		h.send(m)
 	}
 }
@@ -596,7 +664,7 @@ func (h *Handler) handleReminders(ctx context.Context, chatID, userID int64, arg
 		if enabled { h.reply(chatID, "🔔 Напоминания включены.") } else { h.reply(chatID, "🔕 Напоминания выключены.") }
 		return
 	}
-	m := tgbotapi.NewMessage(chatID, "🔔 Напоминания приходят вечером накануне вывоза.")
+	m := h.newMessage(chatID, "🔔 Напоминания приходят вечером накануне вывоза.")
 	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Включить", "reminders_on"), tgbotapi.NewInlineKeyboardButtonData("Выключить", "reminders_off")),
 	)
@@ -606,6 +674,15 @@ func (h *Handler) handleReminders(ctx context.Context, chatID, userID int64, arg
 func (h *Handler) showAdminHelp(chatID, userID int64) {
 	if !h.isAdmin(userID) && !h.isCollector(userID) && !h.isRecycler(userID) { h.reply(chatID, "У вас нет доступа к ролям пилота."); return }
 	h.reply(chatID, "🛠 <b>Команды пилота</b>\n\nСборщик: /batch → QR → вес → /finishbatch\nПолучатель: /accept ECO-... ПРИНЯТЫЙ_КГ\nАдминистратор: /issues, /dumps, /resolve_issue ID, /resolve_dump ID\n\nРоли задаются через ADMIN_TELEGRAM_IDS, COLLECTOR_TELEGRAM_IDS и RECYCLER_TELEGRAM_IDS.")
+}
+
+func (h *Handler) showLanguage(chatID int64) {
+	m := tgbotapi.NewMessage(chatID, "Til / Язык · tildi tańlań")
+	m.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("🇰🇰 Qaraqalpaqsha", "language_kaa"),
+		tgbotapi.NewInlineKeyboardButtonData("🇷🇺 Русский", "language_ru"),
+	))
+	h.send(m)
 }
 
 func (h *Handler) reminderLoop(ctx context.Context) {
@@ -644,13 +721,18 @@ func (h *Handler) isRecycler(id int64) bool { return h.admins[id] || h.recyclers
 func (h *Handler) setSession(chatID int64, s *session) { h.mu.Lock(); h.sessions[chatID] = s; h.mu.Unlock() }
 func (h *Handler) dropSession(chatID int64) { h.mu.Lock(); delete(h.sessions, chatID); h.mu.Unlock() }
 
-func mainMenu() tgbotapi.ReplyKeyboardMarkup {
+func mainMenu(language string) tgbotapi.ReplyKeyboardMarkup {
+	labels := []string{btnMyBins, btnSchedule, btnMissed, btnDump, btnImpact, btnSort, btnIssues, btnReminders, btnRegister, btnLanguage, btnHelp}
+	if language == "ru" {
+		labels = []string{"♻️ Мои контейнеры", "🚚 График вывоза", "⚠️ Не забрали", "🗑 Сообщить о свалке", "🌱 Экобаланс", "🧭 Что куда?", "📋 Мои обращения", "🔔 Напоминания", "🧍 Регистрация", "🗣 Язык / Til", "ℹ️ Помощь"}
+	}
 	m := tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(btnMyBins), tgbotapi.NewKeyboardButton(btnSchedule)),
-		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(btnMissed), tgbotapi.NewKeyboardButton(btnDump)),
-		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(btnImpact), tgbotapi.NewKeyboardButton(btnSort)),
-		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(btnIssues), tgbotapi.NewKeyboardButton(btnReminders)),
-		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(btnRegister), tgbotapi.NewKeyboardButton(btnHelp)),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[0]), tgbotapi.NewKeyboardButton(labels[1])),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[2]), tgbotapi.NewKeyboardButton(labels[3])),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[4]), tgbotapi.NewKeyboardButton(labels[5])),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[6]), tgbotapi.NewKeyboardButton(labels[7])),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[8]), tgbotapi.NewKeyboardButton(labels[9])),
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton(labels[10])),
 	)
 	m.ResizeKeyboard = true
 	return m
