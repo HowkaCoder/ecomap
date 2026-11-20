@@ -54,6 +54,12 @@ func main() {
 		shutdownHealthServer(server)
 		return
 	}
+	if !boolEnv("BOT_POLLING_ENABLED", true) {
+		log.Println("Telegram polling is disabled; Mini App and API are running")
+		<-ctx.Done()
+		shutdownHealthServer(server)
+		return
+	}
 
 	bot, err := tgbotapi.NewBotAPI(botToken)
 	if err != nil {
@@ -102,6 +108,12 @@ func envOr(key, fallback string) string {
 
 func intEnv(key string, fallback int) int {
 	value, err := strconv.Atoi(os.Getenv(key))
+	if err != nil { return fallback }
+	return value
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value, err := strconv.ParseBool(os.Getenv(key))
 	if err != nil { return fallback }
 	return value
 }
